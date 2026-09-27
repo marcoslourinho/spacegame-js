@@ -12,7 +12,10 @@ function Tiro(context, nave) {
    this.altura = 10;   
    this.x = nave.x + 18;  // 36 / 2
    this.y = nave.y - this.altura;
-   this.velocidade = 400;
+   
+   // 400 px/s no canvas original (500 de altura). Acompanha a altura
+   // atual para o tiro levar o mesmo tempo até o topo da tela.
+   this.velocidade = 400 * context.canvas.height / 500;
    
    this.cor = 'yellow';
    SOM_TIRO.currentTime = 0.0;

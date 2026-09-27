@@ -30,6 +30,20 @@ Nave.prototype = {
       if (this.teclado.pressionada(SETA_ABAIXO) &&
                this.y < this.context.canvas.height - 48)
          this.y += incremento;
+      
+      this.manterDentroDoCanvas();
+   },
+   manterDentroDoCanvas: function() {
+      // Garante que a nave continue visível caso o canvas seja
+      // redimensionado (janela do navegador mudou de tamanho)
+      var canvas = this.context.canvas;
+      var maxX = canvas.width - 36;
+      var maxY = canvas.height - 48;
+      
+      if (this.x < 0) this.x = 0;
+      if (this.x > maxX) this.x = maxX;
+      if (this.y < 0) this.y = 0;
+      if (this.y > maxY) this.y = maxY;
    },
    desenhar: function() {
       if (this.teclado.pressionada(SETA_ESQUERDA))

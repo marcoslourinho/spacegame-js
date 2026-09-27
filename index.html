@@ -2,6 +2,7 @@
 <html>
    
 <head>
+   <meta charset="utf-8">
    <title>Jogo de Nave</title>
    <script src="animacao.js"></script>
    <script src="teclado.js"></script>
@@ -14,6 +15,32 @@
    <script src="explosao.js"></script>
    <script src="painel.js"></script>
    <style>
+   html, body {
+      margin: 0;
+      height: 100%;
+      background: #050020;
+      color: #ddd;
+      font-family: sans-serif;
+      overflow: hidden;
+   }
+   
+   /* Centraliza o jogo na tela, com o rodapé logo abaixo */
+   body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+   }
+   
+   /* Contêiner do jogo: referência de posição para os links */
+   #jogo {
+      position: relative;
+      line-height: 0;
+   }
+   #canvas_animacao {
+      display: block;
+   }
+   
    #link_jogar {
       /* Inicia oculto */
       display: none;
@@ -25,83 +52,189 @@
       /* Fonte */
       font-size: 20px;
       font-family: sans-serif;
+      line-height: 26px;
+      text-align: center;
       
       /* Sem sublinhado e com sombra */
       text-decoration: none;
       text-shadow: 2px 2px 5px black;
          
-      /* Posicionamento */
+      /* Posicionamento relativo ao canvas (centralizado) */
       position: absolute;
-      left: 220px;
-      top: 330px;
+      left: 50%;
+      top: 66%;
+      transform: translate(-50%, -50%);
 
       /* A imagem do botão é 72x72, descontamos os paddings */
       width: 52px;
       height: 26px;
       padding: 23px 10px;
    }
-   #postar_pontuacao {
-      /* Ocultar o link */
-      display: none;
-      
-      /* Visual a gosto! */
-      color: yellow;         
-      position: absolute;
-      left: 180px;
-      top: 410px;
-   }      
+   /* Rodapé com instruções */
+   #rodape {
+      padding: 6px 8px;
+      font-size: 14px;
+      white-space: nowrap;
+   }
+   #rodape p {
+      margin: 0;
+   }
    </style>
 </head>
 
 <body>
    
-    <script>
-      window.fbAsyncInit = function() {
-        FB.init({
-          // Esta é sua ID
-          appId      : '256351554550031',
-          xfbml      : true,
-          version    : 'v2.0'
-        });
-      };
-
-      (function(d, s, id){
-         var js, fjs = d.getElementsByTagName(s)[0];
-         if (d.getElementById(id)) {return;}
-         js = d.createElement(s); js.id = id;
-         js.src = "http://connect.facebook.net/pt_BR/sdk.js";
-         fjs.parentNode.insertBefore(js, fjs);
-       }(document, 'script', 'facebook-jssdk'));
-    </script>  
+   <div id="jogo">
+      <canvas id="canvas_animacao" width="500" height="500"></canvas>
+      
+      <a id="link_jogar" href="javascript: iniciarJogo()">Jogar</a>
+   </div>
    
-   <canvas id="canvas_animacao" width="500" height="500"></canvas>
-   
-   <a id="link_jogar" href="javascript: iniciarJogo()">Jogar</a>
-   
-   <div id="botao_compartilhar" class="fb-share-button" data-href="http://gamecursos.com.br/jogo-nave" data-type="button_count"></div>
-   
-   <a id="postar_pontuacao" 
-      href="javascript: postarPontuacao()">Compartilhar Pontua&ccedil;&atilde;o</a>
-   
-   <p>
-      Setas: movimento <br>
-      Espa&ccedil;o: tiro <br>
-      Enter: pausa
-   </p>
+   <div id="rodape">
+      <p>
+         Setas: movimento &middot;
+         Espa&ccedil;o: tiro &middot;
+         Enter: pausa
+      </p>
+   </div>
    
    <script>
       // Canvas e Context
       var canvas = document.getElementById('canvas_animacao');
       var context = canvas.getContext('2d');
 
+      // Dimensões originais do jogo (500x500). Servem de referência
+      // para manter a dificuldade quando o canvas é maior.
+      var LARGURA_BASE = 500;
+      var ALTURA_BASE = 500;
+      
+      // Tamanho mínimo do canvas, para telas muito pequenas
+      var LARGURA_MINIMA = 320;
+      var ALTURA_MINIMA = 320;
+      
+      // Intervalo original entre um OVNI e outro (ms), no canvas base
+      var INTERVALO_OVNI_BASE = 1000;
+      
+      // Progressão de dificuldade: multiplica a velocidade e a
+      // frequência dos OVNIs. Começa abaixo do original (1.0) e cresce
+      // linearmente com o tempo de jogo até o máximo.
+      var DIFICULDADE_INICIAL = 0.4;
+      var DIFICULDADE_MAXIMA = 1.5;
+      var TEMPO_DIFICULDADE_MAXIMA = 180000;  // 3 minutos (ms)
+      
+      // Zona de surgimento dos OVNIs. Em telas largas, eles nascem
+      // concentrados numa faixa central (fração da largura da tela,
+      // nunca menor que a largura original do jogo), para ficarem ao
+      // alcance da nave. Uma pequena parcela ainda pode nascer em
+      // qualquer ponto, para não existir "zona segura" nas bordas.
+      var FRACAO_ZONA_CENTRAL = 0.5;          // 25% | 50% | 25%
+      var PROBABILIDADE_ZONA_CENTRAL = 0.85;  // 85% na faixa central
+
       // Variáveis principais
       var imagens, animacao, teclado, colisor, nave, criadorInimigos;
+      var espaco, estrelas, nuvens, painel;
       var totalImagens = 0, carregadas = 0;
       var musicaAcao;
+      
+      // Estado da tela: usado para redesenhar as telas estáticas
+      // quando a janela é redimensionada
+      var estado = 'carregando';  // carregando, pronto, jogando,
+                                  // pausado, gameover
+      
+      // Ajusta o canvas ao tamanho da janela antes de tudo
+      dimensionarCanvas();
+      window.addEventListener('resize', aoRedimensionar);
       
       // Começa carregando as imagens e músicas
       carregarImagens();
       carregarMusicas();
+      
+      function dimensionarCanvas() {
+         // O canvas ocupa toda a janela, menos o rodapé e uma margem.
+         // A resolução lógica acompanha o tamanho em pixels CSS, ou
+         // seja, os sprites continuam sendo desenhados em 1:1 e não
+         // perdem nitidez. O que aumenta é a área de jogo.
+         var rodape = document.getElementById('rodape');
+         var margem = 16;
+         
+         var largura = window.innerWidth - margem;
+         var altura = window.innerHeight - rodape.offsetHeight - margem;
+         
+         canvas.width = Math.max(LARGURA_MINIMA, Math.floor(largura));
+         canvas.height = Math.max(ALTURA_MINIMA, Math.floor(altura));
+      }
+      
+      function aoRedimensionar() {
+         dimensionarCanvas();
+         
+         // Mantém a nave visível no novo tamanho
+         if (nave) nave.manterDentroDoCanvas();
+         
+         // Redefinir o tamanho do canvas apaga o desenho; as telas
+         // estáticas precisam ser redesenhadas (durante o jogo o
+         // próximo frame já cuida disso)
+         switch (estado) {
+            case 'carregando': desenharCarregando(); break;
+            case 'pronto':     desenharFundoEstatico(); break;
+            case 'pausado':    desenharPausado(); break;
+            case 'gameover':   desenharGameOver(); break;
+         }
+      }
+      
+      function desenharFundoEstatico() {
+         // O fundo "espaço" é um gradiente, então pode ser esticado
+         // para cobrir o canvas sem perda visível de qualidade
+         context.drawImage(imagens.espaco, 0, 0, canvas.width,
+                           canvas.height);
+      }
+      
+      function escreverCentralizado(texto, tamanhoMaximo, y, cor) {
+         // Fonte proporcional à largura, limitada ao tamanho original
+         var tamanho = Math.min(tamanhoMaximo, 
+                                Math.floor(canvas.width * 0.14));
+         
+         context.save();
+         context.fillStyle = cor || 'white';
+         context.strokeStyle = 'black';
+         context.font = tamanho + 'px sans-serif';
+         context.textAlign = 'center';
+         context.textBaseline = 'middle';
+         context.fillText(texto, canvas.width / 2, y);
+         context.strokeText(texto, canvas.width / 2, y);
+         context.restore();
+      }
+      
+      function desenharCarregando() {
+         // Fundo
+         desenharFundoEstatico();
+         
+         // Texto "Carregando"
+         escreverCentralizado("Carregando...", 50, canvas.height * 0.4);
+         
+         // Barra de loading centralizada
+         var tamanhoTotal = Math.floor(canvas.width * 0.6);
+         var tamanho = carregadas / totalImagens * tamanhoTotal;
+         var x = (canvas.width - tamanhoTotal) / 2;
+         var y = canvas.height * 0.5;
+         
+         context.save();
+         context.fillStyle = 'yellow';
+         context.fillRect(x, y, tamanho, 50);
+         context.restore();
+      }
+      
+      function desenharPausado() {
+         escreverCentralizado("Pausado", 50, canvas.height * 0.4);
+      }
+      
+      function desenharGameOver() {
+         desenharFundoEstatico();
+         escreverCentralizado("GAME OVER", 70, canvas.height * 0.4);
+         
+         // Pontuação final, entre o "GAME OVER" e o botão "Jogar"
+         escreverCentralizado("Pontuação: " + painel.pontuacao, 32,
+                              canvas.height * 0.52, 'yellow');
+      }
       
       function carregarImagens() {
          // Objeto contendo os nomes das imagens
@@ -127,30 +260,12 @@
       }
       
       function carregando() {
-         context.save();
-         
-         // Fundo 
-         context.drawImage(imagens.espaco, 0, 0, canvas.width,
-                           canvas.height);
-         
-         // Texto "Carregando"
-         context.fillStyle = 'white';
-         context.strokeStyle = 'black';
-         context.font = '50px sans-serif';
-         context.fillText("Carregando...", 100, 200);
-         context.strokeText("Carregando...", 100, 200);
-         
-         // Barra de loading
          carregadas++;
-         var tamanhoTotal = 300;
-         var tamanho = carregadas / totalImagens * tamanhoTotal;
-         context.fillStyle = 'yellow';
-         context.fillRect(100, 250, tamanho, 50);
-         
-         context.restore();         
+         desenharCarregando();
          
          if (carregadas == totalImagens) {
             iniciarObjetos();
+            estado = 'pronto';
             mostrarLinkJogar();
          }
       }
@@ -212,11 +327,33 @@
          criadorInimigos = {
             ultimoOvni: new Date().getTime(),
             
+            // Tempo efetivamente jogado (ms), sem contar pausas.
+            // Só avança enquanto a animação está ligada.
+            tempoJogado: 0,
+            
+            dificuldade: function() {
+               var progresso = Math.min(1, 
+                  this.tempoJogado / TEMPO_DIFICULDADE_MAXIMA);
+               return DIFICULDADE_INICIAL + 
+                  (DIFICULDADE_MAXIMA - DIFICULDADE_INICIAL) * progresso;
+            },
+            
             processar: function() {
+               this.tempoJogado += this.animacao.decorrido;
+               
                var agora = new Date().getTime();
                var decorrido = agora - this.ultimoOvni;
                
-               if (decorrido > 1000) {
+               // A frequência acompanha a largura da zona central
+               // (onde os OVNIs se concentram), para manter a mesma
+               // densidade de inimigos do jogo original (500px).
+               // A dificuldade encurta o intervalo conforme o jogo
+               // avança.
+               var intervalo = 
+                  INTERVALO_OVNI_BASE * LARGURA_BASE 
+                  / larguraZonaCentral() / this.dificuldade();
+               
+               if (decorrido > intervalo) {
                   novoOvni();
                   this.ultimoOvni = agora;
                }
@@ -230,14 +367,17 @@
          var imgOvni = imagens.ovni;
          var ovni = new Ovni(context, imgOvni, imagens.explosao);
 
-         // Mínimo: 500; máximo: 1000
+         // Mínimo: 500; máximo: 1000 (no canvas base). A velocidade
+         // acompanha a altura do canvas para que o OVNI leve o mesmo
+         // tempo para atravessar a tela, seja ela qual for, e cresce
+         // gradativamente com a dificuldade.
+         var fatorAltura = canvas.height / ALTURA_BASE;
+         var dificuldade = criadorInimigos.dificuldade();
          ovni.velocidade = 
-            Math.floor( 500 + Math.random() * (1000 - 500 + 1) );
+            Math.floor( (500 + Math.random() * (1000 - 500 + 1)) 
+                        * fatorAltura * dificuldade );
          
-         // Mínimo: 0; máximo: largura do canvas - largura do ovni   
-         ovni.x = 
-            Math.floor(Math.random() * 
-                       (canvas.width - imgOvni.width + 1) );
+         ovni.x = posicaoInicialOvni(imgOvni.width);
                   
          // Descontar a altura
          ovni.y = -imgOvni.height;
@@ -246,20 +386,46 @@
          colisor.novoSprite(ovni);
       }
       
+      function larguraZonaCentral() {
+         // Fração da tela, mas nunca menor que o jogo original nem
+         // maior que a própria tela
+         var largura = canvas.width * FRACAO_ZONA_CENTRAL;
+         largura = Math.max(largura, LARGURA_BASE);
+         return Math.min(largura, canvas.width);
+      }
+      
+      function posicaoInicialOvni(larguraOvni) {
+         // Limites absolutos: o OVNI precisa caber inteiro na tela
+         var xMinTela = 0;
+         var xMaxTela = canvas.width - larguraOvni;
+         
+         var xMin = xMinTela;
+         var xMax = xMaxTela;
+         
+         if (Math.random() < PROBABILIDADE_ZONA_CENTRAL) {
+            // Faixa central, centralizada na tela
+            var metade = larguraZonaCentral() / 2;
+            var centro = canvas.width / 2;
+            
+            xMin = Math.max(xMinTela, Math.floor(centro - metade));
+            xMax = Math.min(xMaxTela, 
+                            Math.floor(centro + metade - larguraOvni));
+         }
+         
+         // Sorteio uniforme dentro da faixa escolhida
+         return xMin + Math.floor(Math.random() * (xMax - xMin + 1));
+      }
+      
       function pausarJogo() {
          if (animacao.ligado) {
             animacao.desligar();
             ativarTiro(false);
-            context.save();
-            context.fillStyle = 'white';
-            context.strokeStyle = 'black';
-            context.font = '50px sans-serif';
-            context.fillText("Pausado", 160, 200);
-            context.strokeText("Pausado", 160, 200);
-            context.restore();
+            estado = 'pausado';
+            desenharPausado();
          }
          else {
             criadorInimigos.ultimoOvni = new Date().getTime();
+            estado = 'jogando';
             animacao.ligar();
             ativarTiro(true);
          }
@@ -290,6 +456,7 @@
       
       function iniciarJogo() {
          criadorInimigos.ultimoOvni = new Date().getTime();
+         criadorInimigos.tempoJogado = 0;  // dificuldade volta ao início
          
          // Tiro
          ativarTiro(true);
@@ -299,11 +466,10 @@
          
          document.getElementById('link_jogar').style.display =
             'none';
-         document.getElementById('postar_pontuacao').style.display =
-            'none';
          
          painel.pontuacao = 0;
          musicaAcao.play();
+         estado = 'jogando';
          animacao.ligar();
       }
       
@@ -318,18 +484,12 @@
          musicaAcao.pause();
          musicaAcao.currentTime = 0.0;
          
-         // Fundo
-         context.drawImage(imagens.espaco, 0, 0, canvas.width,
-                           canvas.height);
-         
-         // Texto "Game Over"
-         context.save();
-         context.fillStyle = 'white';
-         context.strokeStyle = 'black';
-         context.font = '70px sans-serif';
-         context.fillText("GAME OVER", 40, 200);
-         context.strokeText("GAME OVER", 40, 200);
-         context.restore();
+         // Fundo e texto "Game Over". O desenho é adiado para o
+         // próximo frame porque gameOver() é chamado no meio de um
+         // ciclo da animação e os sprites restantes desse ciclo
+         // ainda seriam desenhados por cima do texto.
+         estado = 'gameover';
+         requestAnimationFrame(desenharGameOver);
          
          // Volta o link "Jogar"
          mostrarLinkJogar();
@@ -342,10 +502,6 @@
          
          // Tirar todos os inimigos da tela
          removerInimigos();
-         
-         // Link de postar pontuação
-         document.getElementById('postar_pontuacao')
-            .style.display = 'block';
       }
       
       function removerInimigos() {
@@ -353,22 +509,6 @@
             if (animacao.sprites[i] instanceof Ovni)
                animacao.excluirSprite(animacao.sprites[i]);
          }
-      }
-      
-      function postarPontuacao() {
-          // API de feed do Facebook
-          FB.ui(
-            {
-             method: 'feed',
-             name: 'Jogo de Nave',
-             caption: 'Jogue e compartilhe com seus amigos!',
-             description: (
-                'Minha pontuacao foi: ' + painel.pontuacao
-             ),
-             link: 'http://gamecursos.com.br/jogo-nave'
-            },
-            function(response) {}
-          );       
       }
    </script>
 </body>
